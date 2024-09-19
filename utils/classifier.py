@@ -3,7 +3,6 @@ import math
 import json
 import random
 import pathlib
-from packaging import version
 from typing import Optional, List, Tuple, Dict, Any, Union, Callable
 from dataclasses import dataclass, field
 from collections import Counter
@@ -18,9 +17,9 @@ from tqdm import tqdm
 from transformers import DebertaV2Model, DebertaV2Tokenizer
 from torch.nn import CrossEntropyLoss, BCELoss
 from torch.utils.data import Dataset, DataLoader
-import torch.nn.functional as F
 
 from .import_utils import import_custom_func
+from .act_fn import ACT2FN
 
 @dataclass
 class Arguments:
@@ -88,12 +87,16 @@ class Arguments:
         metadata={"help": "max train samples"}
     )
     preprocess_fn_path: str = field(
-        default="./utils.py",
+        default="utils/utils.py",
         metadata={"help": "Path to the preprocess function"}
     )
     preprocess_fn_name: str = field(
         default="preprocess_content",
         metadata={"help": "Name of the preprocess function"}
+    )
+    num_labels: int = field(
+        default=None,
+        metadata={"help": "Number of labels"}
     )
 
 class DataManager:
@@ -101,8 +104,9 @@ class DataManager:
         self.tokenizer = DebertaV2Tokenizer.from_pretrained(args.tokenizer_path)
         self.tokenizer.model_max_length = 512
         self.args = args
-        self.preprocess_fn = import_custom_func(args.preprocess_fn_path, args.preprocess_fn_name)
         self.label_process()
+        args.num_labels = len(self.label_to_id)
+        self.preprocess_fn = import_custom_func(args.preprocess_fn_path, args.preprocess_fn_name)
         self.prepare_data()
 
     def prepare_data(self):
@@ -126,11 +130,10 @@ class DataManager:
             raise ValueError(f'Unknown data format: {data_path.suffix}')
 
         data = data_load_fn(file_path)
-        try:
-            data['content'] and data['label']
-        except KeyError as e:
+
+        if "content" not in data.columns or "label" not in data.columns:
             logger.error(f'No content or label column in {file_path}, your input data should have content and label columns')
-            raise e
+            raise ValueError
         return data
 
     def get_data_2s(self, which):
@@ -143,7 +146,7 @@ class DataManager:
             data = self.data_load(self.args.test_file)
 
         smps = []
-        for idx, item in enumerate(tqdm(data.iterrows(), total=len(data))):
+        for idx, item in tqdm(data.iterrows(), total=len(data)):
             if which == "train" and self.args.max_train_samples and idx >= self.args.max_train_samples:
                 break
             input_str = self.preprocess_fn(item['content'], which="content")
@@ -193,65 +196,6 @@ class MyDataSet(Dataset):
     
     def __len__(self):
         return len(self.smps)
-
-def linear_act(x):
-    return x
-
-def _mish_python(x):
-    return x * torch.tanh(nn.functional.softplus(x))
-
-if version.parse(torch.__version__) < version.parse("1.9"):
-    mish = _mish_python
-else:
-    mish = nn.functional.mish
-
-def gelu_python(x):
-    return x * 0.5 * (1.0 + torch.erf(x / math.sqrt(2.0)))
-
-def gelu_new(x):
-    """
-    Implementation of the GELU activation function currently in Google BERT repo (identical to OpenAI GPT). Also see
-    the Gaussian Error Linear Units paper: https://arxiv.org/abs/1606.08415
-    """
-    return 0.5 * x * (1.0 + torch.tanh(math.sqrt(2.0 / math.pi) * (x + 0.044715 * torch.pow(x, 3.0))))
-
-def gelu_fast(x):
-    return 0.5 * x * (1.0 + torch.tanh(x * 0.7978845608 * (1.0 + 0.044715 * x * x)))
-
-def quick_gelu(x):
-    return x * torch.sigmoid(1.702 * x)
-
-def _silu_python(x):
-    return x * torch.sigmoid(x)
-
-
-if version.parse(torch.__version__) < version.parse("1.7"):
-    silu = _silu_python
-else:
-    silu = nn.functional.silu
-
-def gelu_python(x):
-    return x * 0.5 * (1.0 + torch.erf(x / math.sqrt(2.0)))
-
-if version.parse(torch.__version__) < version.parse("1.4"):
-    gelu = gelu_python
-else:
-    gelu = nn.functional.gelu
-
-ACT2FN = {
-    "relu": nn.functional.relu,
-    "silu": silu,
-    "swish": silu,
-    "gelu": gelu,
-    "tanh": torch.tanh,
-    "gelu_python": gelu_python,
-    "gelu_new": gelu_new,
-    "gelu_fast": gelu_fast,
-    "quick_gelu": quick_gelu,
-    "mish": mish,
-    "linear": linear_act,
-    "sigmoid": torch.sigmoid,
-}
 
 class DropoutContext(object):
     def __init__(self):
@@ -354,7 +298,6 @@ class ContextPooler(nn.Module):
         We "pool" the model by simply taking the hidden state corresponding
         to the first token.
         """
-
         context_token = hidden_states[:, 0]
         context_token = self.dropout(context_token)
         pooled_output = self.dense(context_token)
@@ -364,23 +307,23 @@ class ContextPooler(nn.Module):
     def output_dim(self):
         return self.config.hidden_size
     
-
 class ModelDefine(nn.Module):
     def __init__(self, args):
         super(ModelDefine, self).__init__()
         print(args.model_name_or_path)
         self.deberta = DebertaV2Model.from_pretrained(args.model_name_or_path)
         self.config = self.deberta.config
-        num_labels = getattr(self.config, "num_labels", 2)
+        num_labels = args.num_labels if args.num_labels else getattr(self.config, "num_labels", 2)
         self.num_labels = num_labels
         self.config.num_labels = num_labels
         self.config.classifier_dropout = 0.0
         self.pooler = ContextPooler(self.config)
-        self.classifier = nn.Linear(1024,2)
+        self.classifier = nn.Linear(self.config.hidden_size, num_labels)
         drop_out = getattr(self.config, "cls_dropout", None)
         drop_out = self.config.hidden_dropout_prob if drop_out is None else drop_out
         self.dropout = StableDropout(drop_out)
         self.alpha = 0.5
+        self.ce_loss = CrossEntropyLoss()
     
     def get_input_embeddings(self):
         return self.deberta.get_input_embeddings()
@@ -416,10 +359,7 @@ class ModelDefine(nn.Module):
         pooled_output = self.dropout(pooled_output)
         logits = self.classifier(pooled_output)
         if do_train:
-            loss = None
-            # BPR_loss = BPRLoss()
-            CE_loss = CrossEntropyLoss()
-            loss = CE_loss(logits.view(-1, self.num_labels), labels.view(-1))
+            loss = self.ce_loss(logits.view(-1, self.num_labels), labels.view(-1))
             return logits, loss
         else:
             return logits
