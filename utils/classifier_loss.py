@@ -15,7 +15,7 @@ class FocalLoss(nn.Module):
     def forward(self, input_tensor, target_tensor):
         assert input_tensor.shape[0] == target_tensor.shape[0]
         
-        prob = F.softmax(input_tensor, dim = -1)
+        prob = F.softmax(input_tensor, dim=-1)
         log_prob = torch.log(prob + 1e-8)
         
         loss = F.nll_loss(
@@ -26,7 +26,6 @@ class FocalLoss(nn.Module):
         )
 
         return loss
-
 
 class FocalLoss_1(nn.Module):
     def __init__(self, alpha=1, gamma=2, logits=True, reduce=True):

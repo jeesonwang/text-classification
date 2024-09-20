@@ -20,6 +20,7 @@ from torch.utils.data import Dataset, DataLoader
 
 from .import_utils import import_custom_func
 from .act_fn import ACT2FN
+from .classifier_loss import FocalLoss
 
 @dataclass
 class Arguments:
@@ -323,7 +324,11 @@ class ModelDefine(nn.Module):
         drop_out = self.config.hidden_dropout_prob if drop_out is None else drop_out
         self.dropout = StableDropout(drop_out)
         self.alpha = 0.5
-        self.ce_loss = CrossEntropyLoss()
+        # self.loss_fn = CrossEntropyLoss()
+        # weight = torch.FloatTensor([1-self.alpha, self.alpha])
+        # if torch.cuda.is_available():
+        #     weight = weight.cuda()
+        self.loss_fn = FocalLoss()
     
     def get_input_embeddings(self):
         return self.deberta.get_input_embeddings()
@@ -359,7 +364,7 @@ class ModelDefine(nn.Module):
         pooled_output = self.dropout(pooled_output)
         logits = self.classifier(pooled_output)
         if do_train:
-            loss = self.ce_loss(logits.view(-1, self.num_labels), labels.view(-1))
+            loss = self.loss_fn(logits.view(-1, self.num_labels), labels.view(-1))
             return logits, loss
         else:
             return logits

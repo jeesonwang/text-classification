@@ -135,12 +135,11 @@ def setup_seed(seed):
 if __name__ == '__main__':
     parser = HfArgumentParser(Arguments)
     args: Arguments
-    # if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
-    #     args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))[0]
-    # else:
-    #     args = parser.parse_args_into_dataclasses()[0]
-    # test
-    args = parser.parse_json_file(json_file="/raid/shnu/wjs/ftembedding/configs/train_config.json")[0]
+    if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
+        args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))[0]
+    else:
+        args = parser.parse_args_into_dataclasses()[0]
+    
     logger.info(args)
     setup_seed(0)
     if torch.cuda.is_available():
