@@ -14,7 +14,7 @@ import torch
 import pandas as pd
 import torch.nn as nn
 from tqdm import tqdm
-from transformers import DebertaV2Model, DebertaV2Tokenizer
+from transformers import DebertaV2Model, DebertaV2Tokenizer, AutoModel, AutoTokenizer
 from torch.nn import CrossEntropyLoss, BCELoss
 from torch.utils.data import Dataset, DataLoader
 
@@ -40,7 +40,7 @@ class Arguments:
         metadata={"help": "Path to save the finetuned model."},
     )
     learning_rate: float = field(
-        default=None,
+        default=5e-5,
         metadata={"help": ""}
     )
     train_batch_size: int = field(
@@ -102,12 +102,12 @@ class Arguments:
 
 class DataManager:
     def __init__(self, args: Arguments):
-        self.tokenizer = DebertaV2Tokenizer.from_pretrained(args.tokenizer_path)
+        self.tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_path)
         self.tokenizer.model_max_length = 512
         self.args = args
+        self.preprocess_fn = import_custom_func(args.preprocess_fn_path, args.preprocess_fn_name)
         self.label_process()
         args.num_labels = len(self.label_to_id)
-        self.preprocess_fn = import_custom_func(args.preprocess_fn_path, args.preprocess_fn_name)
         self.prepare_data()
 
     def prepare_data(self):
@@ -152,7 +152,7 @@ class DataManager:
                 break
             input_str = self.preprocess_fn(item['content'], which="content")
             input = self.tokenizer(input_str, padding="max_length", truncation=True, return_tensors="pt")
-            label = self.label_to_id[self.preprocess_fn(item['label'], which="label")]
+            label = torch.tensor(self.label_to_id[self.preprocess_fn(item['label'], which="label")], dtype=torch.long)
 
             smps.append([input["input_ids"][0], input["token_type_ids"][0], input["attention_mask"][0], label])
             
@@ -290,7 +290,7 @@ class StableDropout(nn.Module):
 class ContextPooler(nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.dense = nn.Linear(config.pooler_hidden_size, config.pooler_hidden_size)
+        self.dense = nn.Linear(config.hidden_size, config.pooler_hidden_size)
         self.dropout = StableDropout(config.pooler_dropout)
         self.config = config
 
@@ -312,22 +312,23 @@ class ModelDefine(nn.Module):
     def __init__(self, args):
         super(ModelDefine, self).__init__()
         print(args.model_name_or_path)
-        self.deberta = DebertaV2Model.from_pretrained(args.model_name_or_path)
+        self.deberta = AutoModel.from_pretrained(args.model_name_or_path)
         self.config = self.deberta.config
         num_labels = args.num_labels if args.num_labels else getattr(self.config, "num_labels", 2)
         self.num_labels = num_labels
         self.config.num_labels = num_labels
+        if not hasattr(self.config, "pooler_hidden_size"):
+            self.config.pooler_hidden_size = self.config.pooler_fc_size
+            self.config.pooler_dropout = self.config.hidden_dropout_prob
+            self.config.pooler_hidden_act = self.config.hidden_act
         self.config.classifier_dropout = 0.0
         self.pooler = ContextPooler(self.config)
-        self.classifier = nn.Linear(self.config.hidden_size, num_labels)
+        self.classifier = nn.Linear(self.config.pooler_hidden_size, num_labels)
         drop_out = getattr(self.config, "cls_dropout", None)
         drop_out = self.config.hidden_dropout_prob if drop_out is None else drop_out
         self.dropout = StableDropout(drop_out)
         self.alpha = 0.5
         # self.loss_fn = CrossEntropyLoss()
-        # weight = torch.FloatTensor([1-self.alpha, self.alpha])
-        # if torch.cuda.is_available():
-        #     weight = weight.cuda()
         self.loss_fn = FocalLoss()
     
     def get_input_embeddings(self):
