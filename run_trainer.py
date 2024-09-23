@@ -7,6 +7,7 @@ import math
 import random
 import re
 import logging
+from typing import List, Optional, Tuple, Union
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("Classifier")
 
@@ -26,6 +27,8 @@ class Trainer:
             self.device = 'cuda'
         else:
             self.device = device
+        if not os.path.exists(args.model_save_dir):
+            os.makedirs(args.model_save_dir, exist_ok=True)
         self.dt = DataManager(args)
         self.args = args
         if 'pkl' in self.args.model_name_or_path:
@@ -36,13 +39,11 @@ class Trainer:
         self.model.to(self.device)
         self.train_loss = AverageMeter()
         self.updates = 0
-        if not os.path.exists(self.args.model_save_dir):
-            os.makedirs(self.args.model_save_dir, exist_ok=True)
         self.optimizer = optim.Adamax([p for p in self.model.parameters() if p.requires_grad], lr=args.learning_rate)
         self.best_acc = 0.
         
     def train(self):
-        logger.info("=" * 50)
+        logger.info("=" * 50 + "Train" + "=" * 50)
         for i in range(self.args.epochs):
             logger.info("epoch: %d" % i)
             with tqdm(enumerate(self.dt.iter_batches(which="train", batch_size=self.args.train_batch_size)), ncols=80) as t:
@@ -74,14 +75,9 @@ class Trainer:
                 save_path = os.path.join(self.args.model_save_dir, 'checkpoint_best.pkl')
                 logger.info(f"save model to {save_path}")
                 torch.save(self.model, save_path)
-
+    
+    @torch.no_grad()
     def validate(self, which="test", epoch=-1):
-        def calculate_acc(labels, scores):
-            y_pred = np.argmax(scores, axis=1)
-            correct_predictions = np.sum(y_pred == labels)
-            accuracy = correct_predictions / len(labels)
-            return accuracy
-        
         gold_label = []
         y_predprob = []
         for batch in tqdm(self.dt.iter_batches(which=which, batch_size=self.args.eval_batch_size), ncols=80):
@@ -102,9 +98,22 @@ class Trainer:
             y_predprob.extend(F.softmax(logits, dim=1).detach().cpu().numpy())
         gold_label = np.array(gold_label)
         y_predprob = np.array(y_predprob)
-        acc = calculate_acc(gold_label, y_predprob)
-        logger.info(f"{which} acc={acc}")
-        return acc
+        r1, r5, r10 = self.calculate_metrics(gold_label, y_predprob)
+        logger.info(f"{which} Accuracy@1={r1}, Accuracy@5={r5}, Accuracy@10={r10}")
+        return r1
+
+    @staticmethod
+    def calculate_metrics(labels, scores, topk_lst: List[int] = [1, 5, 10]):
+        def calculate_acc(labels, scores, top_k=1):
+            top_k_indices = np.argsort(scores, axis=1)[:, -top_k:]
+            correct_predictions = np.sum([label in indices for label, indices in zip(labels, top_k_indices)])
+            recall = correct_predictions / len(labels)
+            return recall
+        rem = tuple()
+        for k in topk_lst:
+            recall_k = calculate_acc(labels, scores, top_k=k)
+            rem += (recall_k,)
+        return rem
 
 class AverageMeter(object):
     """Computes and stores the average and current value."""
