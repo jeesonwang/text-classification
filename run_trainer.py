@@ -22,7 +22,7 @@ from transformers.hf_argparser import HfArgumentParser
 from utils.classifier import ModelDefine, DataManager, Arguments
 
 class Trainer:
-    def __init__(self, args, device):
+    def __init__(self, args: Arguments, device):
         if device is None:
             self.device = 'cuda'
         else:
@@ -31,11 +31,16 @@ class Trainer:
             os.makedirs(args.model_save_dir, exist_ok=True)
         self.dt = DataManager(args)
         self.args = args
+
         if 'pkl' in self.args.model_name_or_path:
             self.model = torch.load(self.args.model_name_or_path)
-            logger.info(f'load best model from {self.args.model_name_or_path}')
+        elif any(file.endswith('.pth') for file in os.listdir(self.args.model_name_or_path)):
+            self.model = ModelDefine(args)
+            load_path = os.path.join(self.args.model_save_dir, 'checkpoint_best.pth')
+            self.model.load_state_dict(torch.load(load_path))
         else:
             self.model = ModelDefine(args)
+        logger.info(f'load best model from {self.args.model_name_or_path}')
         self.model.to(self.device)
         self.train_loss = AverageMeter()
         self.updates = 0
@@ -72,9 +77,9 @@ class Trainer:
             acc = self.validate(epoch=i, which='dev')
             if acc > self.best_acc:
                 self.best_acc = acc
-                save_path = os.path.join(self.args.model_save_dir, 'checkpoint_best.pkl')
-                logger.info(f"save model to {save_path}")
-                torch.save(self.model, save_path)
+                save_path = os.path.join(self.args.model_save_dir, 'checkpoint_best.pth')
+                logger.info(f"save model parameters to {save_path}")
+                torch.save(self.model.state_dict(), save_path)
     
     @torch.no_grad()
     def validate(self, which="test", epoch=-1):
@@ -148,7 +153,7 @@ if __name__ == '__main__':
         args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))[0]
     else:
         args = parser.parse_args_into_dataclasses()[0]
-    
+    args = parser.parse_json_file(json_file="configs/test_config.json")[0]
     logger.info(args)
     setup_seed(0)
     if torch.cuda.is_available():

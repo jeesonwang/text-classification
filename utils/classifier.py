@@ -1,7 +1,6 @@
 import os
 import math
 import json
-import random
 import pathlib
 from typing import Optional, List, Tuple, Dict, Any, Union, Callable
 from dataclasses import dataclass, field
@@ -311,7 +310,7 @@ class ContextPooler(nn.Module):
 class ModelDefine(nn.Module):
     def __init__(self, args):
         super(ModelDefine, self).__init__()
-        print(args.model_name_or_path)
+        logger.info(args.model_name_or_path)
         self.deberta = AutoModel.from_pretrained(args.model_name_or_path)
         self.config = self.deberta.config
         num_labels = args.num_labels if args.num_labels else getattr(self.config, "num_labels", 2)
