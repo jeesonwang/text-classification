@@ -12,7 +12,6 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("Classifier")
 
 from tqdm import tqdm
-import sklearn
 import torch
 import torch.nn.functional as F
 from torch.autograd import Variable
@@ -34,7 +33,7 @@ class Trainer:
 
         if 'pkl' in self.args.model_name_or_path:
             self.model = torch.load(self.args.model_name_or_path)
-        elif any(file.endswith('.pth') for file in os.listdir(self.args.model_name_or_path)) if os.path.isdir(self.args.model_name_or_path) else False:
+        elif any(file.endswith('.pth') for file in os.listdir(self.args.model_save_dir)) if os.path.isdir(self.args.model_save_dir) else False:
             self.model = ModelDefine(args)
             load_path = os.path.join(self.args.model_save_dir, 'checkpoint_best.pth')
             self.model.load_state_dict(torch.load(load_path))
@@ -119,6 +118,15 @@ class Trainer:
             recall_k = calculate_acc(labels, scores, top_k=k)
             rem += (recall_k,)
         return rem
+    
+    def test_one(self, text: str) -> str:
+        self.model.eval()
+        input_ids, token_type_ids, attention_mask = self.dt.process_one(text)
+        logits = self.model(input_ids=input_ids,
+                token_type_ids=token_type_ids,
+                attention_mask=attention_mask,
+                do_train=False,)
+        return self.dt.id_to_label[str(logits.argmax().item())]
 
 class AverageMeter(object):
     """Computes and stores the average and current value."""
@@ -158,7 +166,7 @@ if __name__ == '__main__':
     if torch.cuda.is_available():
         device = 'cuda'
     else:
-        device = 'gpu'
+        device = 'cpu'
     trainer = Trainer(
         args=args, 
         device=device

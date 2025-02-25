@@ -87,7 +87,7 @@ class Arguments:
         metadata={"help": "max train samples"}
     )
     preprocess_fn_path: str = field(
-        default="utils/utils.py",
+        default="utils/process.py",
         metadata={"help": "Path to the preprocess function"}
     )
     preprocess_fn_name: str = field(
@@ -120,7 +120,7 @@ class DataManager:
             self.test_dataset = MyDataSet(test_smps)
 
     @staticmethod
-    def data_load(file_path: str) -> Callable:
+    def data_load(file_path: str) -> pd.DataFrame | None:
         data_path = pathlib.Path(file_path)
         if data_path.suffix == '.csv':
             data_load_fn = lambda x: pd.read_csv(x)
@@ -136,7 +136,7 @@ class DataManager:
             raise ValueError
         return data
 
-    def get_data_2s(self, which):
+    def get_data_2s(self, which: str) -> List[List[Any]]:
 
         if which == 'train':
             data = self.data_load(self.args.train_file)
@@ -184,6 +184,12 @@ class DataManager:
             save_path = os.path.join(self.args.model_save_dir, 'label_info.json')
             with open(save_path, 'w') as f:
                 json.dump({'label_to_id': self.label_to_id, 'id_to_label': self.id_to_label}, f, indent=4, ensure_ascii=False)
+    
+    def process_one(self, text: str) -> List[Any]:
+        input_str = self.preprocess_fn(text, which="content")
+        input = self.tokenizer(input_str, padding="max_length", truncation=True, return_tensors="pt")
+        
+        return input["input_ids"], input["token_type_ids"], input["attention_mask"]
 
 class MyDataSet(Dataset):
     def __init__(self, smps):
@@ -327,8 +333,8 @@ class ModelDefine(nn.Module):
         drop_out = self.config.hidden_dropout_prob if drop_out is None else drop_out
         self.dropout = StableDropout(drop_out)
         self.alpha = 0.5
-        # self.loss_fn = CrossEntropyLoss()
-        self.loss_fn = FocalLoss()
+        self.loss_fn = CrossEntropyLoss()
+        # self.loss_fn = FocalLoss()
     
     def get_input_embeddings(self):
         return self.deberta.get_input_embeddings()
